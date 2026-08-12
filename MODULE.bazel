@@ -1,0 +1,37 @@
+# Copyright (c) 2025, Martin Urban
+# Licensed under the BSD 3-Clause License (https://opensource.org/license/bsd-3-clause)
+# This file may not be copied, modified, or distributed except according to those terms.
+# ======================================================================================
+module(
+    name = "python-bazel-example",
+    version = "0.1.0",
+)
+
+# bazel_dep(name = "aspect_rules_py", version = "1.6.4-rc1", dev_dependency = True)
+bazel_dep(name = "rules_python", version = "1.5.1")
+
+python = use_extension("@rules_python//python/extensions:python.bzl", "python")
+python.defaults(python_version = "3.11")
+python.toolchain(
+    ignore_root_user_error = True,
+    python_version = "3.11",
+)
+
+pip = use_extension("@rules_python//python/extensions:pip.bzl", "pip")
+pip.parse(
+    hub_name = "pypi",
+    python_version = "3.11",
+    requirements_lock = "//sdk/python:requirements_lock.txt",
+)
+use_repo(pip, "pypi")
+
+# Custom module extension for python-build-standalone
+# python_build_standalone = use_extension(
+#     "//rules_custom:python_build_standalone.bzl",
+#     "python_build_standalone",
+# )
+#
+# use_repo(
+#     python_build_standalone,
+#     "python_standalone_windows",
+# )

@@ -1,0 +1,42 @@
+load("@rules_python//python:defs.bzl", "py_binary", "py_library", "py_test")
+load("@rules_python//python:packaging.bzl", "py_package", "py_wheel")
+
+py_library(
+    name = "lib",
+    srcs = [
+        "__init__.py",
+        "cli.py",
+        "file_util.py",
+    ],
+    imports = ["sdk/python/src"],
+    deps = ["@pypi//numpy"],
+    visibility = ["//visibility:public"],
+)
+
+py_binary(
+    name = "main",
+    srcs = ["main.py"],
+    main = "main.py",
+    imports = [".."],
+    deps = [":lib"],
+    visibility = ["//visibility:public"],
+)
+
+py_package(
+    name = "package",
+    packages = ["python_bazel_example"],
+    deps = [":lib"],
+)
+
+py_wheel(
+    name = "wheel",
+    distribution = "python-bazel-example",
+    version = "0.1.0",
+    deps = [":package"],
+    requires = ["numpy>=2.3.2"],
+    entry_points = {
+        "console_scripts": [
+            "python-bazel-example = python_bazel_example.cli:main",
+        ],
+    },
+)

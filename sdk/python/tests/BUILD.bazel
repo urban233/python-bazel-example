@@ -1,0 +1,11 @@
+load("@rules_python//python:defs.bzl", "py_test")
+
+py_test(
+    name = "test_numpy_usage",
+    srcs = ["test_numpy_usage.py"],
+    imports = ["sdk/python/src"],
+    deps = [
+        "//sdk/python/src/python_bazel_example:lib",
+        "@pypi//numpy",
+    ],
+)
