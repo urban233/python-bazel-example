@@ -1,0 +1,244 @@
+# ======================================================================================
+# Portable application bundle -- one target, all operating systems
+#
+# Goal: build `portable_app.zip`, a self-contained app that runs on ANY of the
+# five platforms below WITHOUT Python installed. The resulting layout is:
+#
+#   ./
+#   ├── python/                      <- standalone CPython 3.11.13 interpreter
+#   │   ├── python.exe (Win) | bin/python3 (macOS/Linux)
+#   │   ├── python311.dll (Win) | lib/libpython3.11.so (Linux) / .dylib (macOS)
+#   │   └── Lib/ (Win) | lib/python3.11/ (macOS/Linux)
+#   ├── app/
+#   │   ├── python_bazel_example/    <- our source code
+#   │   │   ├── __init__.py
+#   │   │   ├── cli.py
+#   │   │   ├── file_util.py
+#   │   │   └── main.py
+#   │   ├── numpy/                   <- third-party package (incl. compiled .pyd/.so)
+#   │   ├── numpy.libs/              <- numpy's own DLLs (Windows only)
+#   │   └── numpy-2.3.2.dist-info/
+#   └── run.bat (Win) | run.sh (macOS/Linux)   <- entry point
+#
+# How to build the bundle for each platform (you can build ANY platform's
+# bundle from ANY host -- the downloads are picked by *target* platform, while
+# rules_pkg's zip tool always runs on the build machine):
+#
+#   bazel build //packaging:portable_app                       # = host platform
+#   bazel build //packaging:portable_app --platforms=//packaging:windows_x86_64
+#   bazel build //packaging:portable_app --platforms=//packaging:linux_x86_64
+#   bazel build //packaging:portable_app --platforms=//packaging:linux_aarch64
+#   bazel build //packaging:portable_app --platforms=//packaging:macos_x86_64
+#   bazel build //packaging:portable_app --platforms=//packaging:macos_arm64
+#
+# Why "flat"? Bazel's default runfiles tree is deeply nested (e.g.
+# app.runfiles/_main/external/rules_python~~python~python_3_11_.../Lib/...),
+# easily exceeding Windows' 260-character MAX_PATH limit. We sidestep that
+# entirely by mapping files into just two directory levels.
+# ======================================================================================
+
+load("@rules_pkg//pkg:mappings.bzl", "pkg_attributes", "pkg_files", "strip_prefix")
+load("@rules_pkg//pkg:zip.bzl", "pkg_zip")
+
+# ----------------------------------------------------------------------------------
+# Target platforms + the config_settings select() branches on.
+#
+# A `platform` bundles OS + CPU constraints into one name that can be passed to
+# `bazel build --platforms=...`. That flag tells Bazel which machine the final
+# artifact is FOR (the "target platform") -- independent of the machine doing
+# the build.
+#
+# select() cannot match "OS AND CPU" in a single branch, so we also define one
+# `config_setting` per platform. Each config_setting is just a named bundle of
+# constraints that select() CAN branch on -- identical constraint list to the
+# platform() of the same name.
+# ----------------------------------------------------------------------------------
+platform(
+    name = "windows_x86_64",
+    constraint_values = [
+        "@platforms//os:windows",
+        "@platforms//cpu:x86_64",
+    ],
+)
+
+config_setting(
+    name = "cfg_windows_x86_64",
+    constraint_values = [
+        "@platforms//os:windows",
+        "@platforms//cpu:x86_64",
+    ],
+)
+
+platform(
+    name = "linux_x86_64",
+    constraint_values = [
+        "@platforms//os:linux",
+        "@platforms//cpu:x86_64",
+    ],
+)
+
+config_setting(
+    name = "cfg_linux_x86_64",
+    constraint_values = [
+        "@platforms//os:linux",
+        "@platforms//cpu:x86_64",
+    ],
+)
+
+platform(
+    name = "linux_aarch64",
+    constraint_values = [
+        "@platforms//os:linux",
+        "@platforms//cpu:aarch64",
+    ],
+)
+
+config_setting(
+    name = "cfg_linux_aarch64",
+    constraint_values = [
+        "@platforms//os:linux",
+        "@platforms//cpu:aarch64",
+    ],
+)
+
+platform(
+    name = "macos_x86_64",
+    constraint_values = [
+        "@platforms//os:macos",
+        "@platforms//cpu:x86_64",
+    ],
+)
+
+config_setting(
+    name = "cfg_macos_x86_64",
+    constraint_values = [
+        "@platforms//os:macos",
+        "@platforms//cpu:x86_64",
+    ],
+)
+
+platform(
+    name = "macos_arm64",
+    constraint_values = [
+        "@platforms//os:macos",
+        "@platforms//cpu:arm64",
+    ],
+)
+
+config_setting(
+    name = "cfg_macos_arm64",
+    constraint_values = [
+        "@platforms//os:macos",
+        "@platforms//cpu:arm64",
+    ],
+)
+
+# ----------------------------------------------------------------------------------
+# The select() helpers below map a target platform to the matching download
+# repo. A select() must be the attribute value itself (srcs = _PYTHON_FILES),
+# every branch must be a LIST of labels, and there is exactly one branch per
+# platform. Which download repo a platform gets depends purely on the platform
+# constraints, so we hoist the choice into a variable and reuse it in pkg_files.
+# ----------------------------------------------------------------------------------
+_PYTHON_FILES = select({
+    ":cfg_windows_x86_64": ["@python_standalone_windows_x86_64//:files"],
+    ":cfg_linux_x86_64": ["@python_standalone_linux_x86_64//:files"],
+    ":cfg_linux_aarch64": ["@python_standalone_linux_aarch64//:files"],
+    ":cfg_macos_x86_64": ["@python_standalone_macos_x86_64//:files"],
+    ":cfg_macos_arm64": ["@python_standalone_macos_arm64//:files"],
+})
+
+_NUMPY_FILES = select({
+    ":cfg_windows_x86_64": ["@numpy_wheel_windows_x86_64//:files"],
+    ":cfg_linux_x86_64": ["@numpy_wheel_linux_x86_64//:files"],
+    ":cfg_linux_aarch64": ["@numpy_wheel_linux_aarch64//:files"],
+    ":cfg_macos_x86_64": ["@numpy_wheel_macos_x86_64//:files"],
+    ":cfg_macos_arm64": ["@numpy_wheel_macos_arm64//:files"],
+})
+
+# The launcher script also differs per OS: run.bat on Windows, run.sh elsewhere.
+_LAUNCHER = select({
+    ":cfg_windows_x86_64": ["run.bat"],
+    "//conditions:default": ["run.sh"],
+})
+
+# ----------------------------------------------------------------------------------
+# 1) Standalone Python interpreter.
+#    `strip_prefix.from_root("")` means: keep each file's path relative to the
+#    repository root (python.exe, Lib/, ...). Without this, rules_pkg would
+#    strip ALL directories and every file would be dumped into python/ (huge
+#    collision). Combined with `prefix = "python"` this produces
+#    python/python.exe, python/Lib/, ... -- or python/bin/python3 on unix.
+# ----------------------------------------------------------------------------------
+pkg_files(
+    name = "python_runtime",
+    srcs = _PYTHON_FILES,
+    prefix = "python",
+    strip_prefix = strip_prefix.from_root(""),
+)
+
+# ----------------------------------------------------------------------------------
+# 2) numpy (native package).
+#    `@numpy_wheel_*//:files` contains numpy/ (and numpy.libs/ on Windows) at
+#    the repo root (same mapping logic as above), so `prefix = "app"` puts them
+#    directly under app/ -- i.e. app/numpy/..., app/numpy.libs/...
+# ----------------------------------------------------------------------------------
+pkg_files(
+    name = "numpy_runtime",
+    srcs = _NUMPY_FILES,
+    prefix = "app",
+    strip_prefix = strip_prefix.from_root(""),
+)
+
+# ----------------------------------------------------------------------------------
+# 3) Our own source code.
+#    `app_sources` is the public filegroup in sdk/python/src/python_bazel_example.
+#    `strip_prefix.from_pkg()` keeps only the file names (everything up to the
+#    source package directory is removed), and `prefix = "app/python_bazel_example"`
+#    places them in the bundle under app/python_bazel_example/.
+# ----------------------------------------------------------------------------------
+pkg_files(
+    name = "app_code",
+    srcs = ["//sdk/python/src/python_bazel_example:app_sources"],
+    prefix = "app/python_bazel_example",
+    strip_prefix = strip_prefix.from_pkg(),
+)
+
+# ----------------------------------------------------------------------------------
+# 4) Launcher script (run.bat or run.sh, chosen per target platform).
+#    `strip_prefix.files_only()` strips all directories, so the single script
+#    ends up at the zip root. `pkg_attributes(mode = "0755")` marks it
+#    executable for unix; the mode is harmless for run.bat on Windows.
+# ----------------------------------------------------------------------------------
+pkg_files(
+    name = "launcher",
+    srcs = _LAUNCHER,
+    attributes = pkg_attributes(mode = "0755"),
+    strip_prefix = strip_prefix.files_only(),
+)
+
+# ----------------------------------------------------------------------------------
+# 5) Assemble everything into one zip.
+#    `out` is mandatory for pkg_zip; it becomes a symlink to the real output.
+#    `package_file_name` gives the real output its per-platform name, so each
+#    bundle lands in bazel-bin/packaging/ as
+#    portable_app_<os>_<arch>.zip (e.g. portable_app_linux_x86_64.zip) and you
+#    never have to guess which platform a plain portable_app.zip contains.
+# ----------------------------------------------------------------------------------
+pkg_zip(
+    name = "portable_app",
+    srcs = [
+        ":python_runtime",
+        ":numpy_runtime",
+        ":app_code",
+        ":launcher",
+    ],
+    out = "portable_app.zip",
+    package_file_name = select({
+        ":cfg_windows_x86_64": "portable_app_windows_x86_64.zip",
+        ":cfg_linux_x86_64": "portable_app_linux_x86_64.zip",
+        ":cfg_linux_aarch64": "portable_app_linux_aarch64.zip",
+        ":cfg_macos_x86_64": "portable_app_macos_x86_64.zip",
+        ":cfg_macos_arm64": "portable_app_macos_arm64.zip",
+    }),
+)

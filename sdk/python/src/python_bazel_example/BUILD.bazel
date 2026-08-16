@@ -1,6 +1,21 @@
 load("@rules_python//python:defs.bzl", "py_binary", "py_library", "py_test")
 load("@rules_python//python:packaging.bzl", "py_package", "py_wheel")
 
+# Expose the raw .py files to other packages (used by //packaging, which bundles
+# them into the portable app). Source files are private by default in Bazel 8.
+# A filegroup is used instead of the py_library below because packaging needs
+# the source files themselves, not a runfiles-aware library.
+filegroup(
+    name = "app_sources",
+    srcs = [
+        "__init__.py",
+        "cli.py",
+        "file_util.py",
+        "main.py",
+    ],
+    visibility = ["//visibility:public"],
+)
+
 py_library(
     name = "lib",
     srcs = [

@@ -7,6 +7,9 @@ common --enable_platform_specific_config
 # Build Settings
 build --define=ij_product=intellij-2025.2
 startup --output_user_root=C:/bzl
+# Required by rules_python >= 2.0.0 (venv/symlink-based runfiles on Windows).
+startup --windows_enable_symlinks
+build --enable_runfiles
 
 # common --java_language_version=17
 # common --java_runtime_version=remotejdk_21

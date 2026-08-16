@@ -1,0 +1,20 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: main (Bazel Python 3.11 + NumPy)",
+            "type": "debugpy",
+            "request": "launch",
+            "python": "${workspaceFolder}/bazel-bin/sdk/python/src/python_bazel_example/main.exe.runfiles/rules_python++python+python_3_11_x86_64-pc-windows-msvc/python.exe",
+            "program": "${workspaceFolder}/sdk/python/src/python_bazel_example/main.py",
+            "cwd": "${workspaceFolder}/sdk/python/src/python_bazel_example",
+            "env": {
+                "PYTHONUNBUFFERED": "1",
+                "PYTHONPATH": "${workspaceFolder}/sdk/python/src;${workspaceFolder}/bazel-bin/sdk/python/src/python_bazel_example/main.exe.runfiles/rules_python++pip+pypi_311_numpy_cp311_cp311_win_amd64_240259d6/site-packages"
+            },
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "preLaunchTask": "bazel: build python main"
+        }
+    ]
+}

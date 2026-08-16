@@ -1,0 +1,18 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "bazel: build python main",
+            "type": "process",
+            "command": "bazel",
+            "args": [
+                "build",
+                "//sdk/python/src/python_bazel_example:main"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": []
+        }
+    ]
+}

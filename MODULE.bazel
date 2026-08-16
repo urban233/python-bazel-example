@@ -7,8 +7,20 @@ module(
     version = "0.1.0",
 )
 
+# Custom repository rule that fetches a standalone CPython interpreter (see
+# packaging/standalone_python.bzl for why plain http_archive is not enough).
+# use_repo_rule() imports a repository_rule from any .bzl file (not just the
+# bundled ones like http_archive).
+standalone_python = use_repo_rule("//packaging:standalone_python.bzl", "standalone_python")
+
 # bazel_dep(name = "aspect_rules_py", version = "1.6.4-rc1", dev_dependency = True)
-bazel_dep(name = "rules_python", version = "1.5.1")
+bazel_dep(name = "rules_python", version = "2.3.1")
+# rules_pkg lets us assemble zip/tar archives out of build targets.
+# We use it to create the self-contained "flat" application bundle.
+bazel_dep(name = "rules_pkg", version = "1.0.1")
+# `platforms` provides the @platforms//os:... and @platforms//cpu:... constraint
+# values used by the platform() definitions and select() in packaging/BUILD.bazel.
+bazel_dep(name = "platforms", version = "0.0.11")
 
 python = use_extension("@rules_python//python/extensions:python.bzl", "python")
 python.defaults(python_version = "3.11")
@@ -25,13 +37,146 @@ pip.parse(
 )
 use_repo(pip, "pypi")
 
-# Custom module extension for python-build-standalone
-# python_build_standalone = use_extension(
-#     "//rules_custom:python_build_standalone.bzl",
-#     "python_build_standalone",
-# )
+# ======================================================================================
+# Portable application bundle inputs (all operating systems)
 #
-# use_repo(
-#     python_build_standalone,
-#     "python_standalone_windows",
-# )
+# The target `//packaging:portable_app` builds a self-contained zip that runs
+# WITHOUT needing Python installed on the target machine. It bundles:
+#
+#   python/  -> a standalone CPython interpreter (this download)
+#   app/     -> our Python package + numpy (next download)
+#   run.bat  -> the launcher on Windows (run.sh on macOS/Linux)
+#
+# `http_archive` is normally a WORKSPACE-style rule, but bzlmod allows us to
+# import it with `use_repo_rule()` and use it here in MODULE.bazel.
+#
+# _BUNDLE_BUILD_FILE is injected into the numpy downloads below (the python
+# downloads get their BUILD file from standalone_python.bzl instead). It only
+# exposes a `filegroup(name = "files")` containing every file (minus large
+# *.pdb debug symbols, the marker files Bazel injects, and bundled test
+# suites). `pkg_files` in packaging/BUILD.bazel reads that filegroup and maps
+# the contents into the bundle.
+# ======================================================================================
+http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+
+_BUNDLE_BUILD_FILE = """\
+filegroup(
+    name = "files",
+    srcs = glob(
+        ["**"],
+        exclude = [
+            "*.pdb",  # debug symbols, not needed at runtime
+            "**/*.pdb",
+            "BUILD.bazel",  # files Bazel injects into the repo; not part of the runtime
+            "WORKSPACE",
+            "REPO.bazel",
+            "MODULE.bazel",
+            "**/__pycache__/**",
+            "**/test/**",  # bundled test suites (large, unused at runtime)
+            "**/tests/**",
+        ],
+    ),
+    visibility = ["//visibility:public"],
+)
+"""
+
+# ----------------------------------------------------------------------------------
+# 1) Standalone CPython 3.11.13 for every OS/CPU combination we ship (from
+#    astral-sh "python-build-standalone", the same upstream build rules_python
+#    uses for its hermetic toolchain). Each tarball's only top-level directory
+#    is "python/", so the rule's `strip_prefix = "python"` moves its contents to
+#    the repo root. Windows has python.exe + python311.dll + Lib/; macOS/Linux
+#    have bin/python3 + lib/python3.11/ instead.
+#
+#    `standalone_python` is a tiny custom repository rule (see
+#    packaging/standalone_python.bzl) -- a plain http_archive cannot remove the
+#    symlink-loop directory that the Linux builds ship in share/terminfo.
+#    The repo name suffix (_windows_x86_64, _linux_aarch64, ...) is arbitrary;
+#    packaging/BUILD.bazel maps each target platform to one of these via
+#    select(). Note: MODULE.bazel does NOT support `for` loops, so the five
+#    platforms are written out explicitly (only URL + sha256 differ).
+# ----------------------------------------------------------------------------------
+standalone_python(
+    name = "python_standalone_windows_x86_64",
+    url = "https://github.com/astral-sh/python-build-standalone/releases/download/20250610/cpython-3.11.13+20250610-x86_64-pc-windows-msvc-install_only.tar.gz",
+    sha256 = "c0f89e3776211147817d54084fa046e2603571e18ff2ae4a4a8ff84ca4f7defc",
+)
+
+standalone_python(
+    name = "python_standalone_linux_x86_64",
+    url = "https://github.com/astral-sh/python-build-standalone/releases/download/20250610/cpython-3.11.13+20250610-x86_64-unknown-linux-gnu-install_only.tar.gz",
+    sha256 = "d93a7699505ee0ac7dec0f09324ffb19a31cce3066a287bb1fe95285ce3ea0c7",
+    delete_terminfo = True,
+)
+
+standalone_python(
+    name = "python_standalone_linux_aarch64",
+    url = "https://github.com/astral-sh/python-build-standalone/releases/download/20250610/cpython-3.11.13+20250610-aarch64-unknown-linux-gnu-install_only.tar.gz",
+    sha256 = "a5954f147e87d9bff3d9733ebb3e74fe997eec5b38eaf5cb4429038228962a16",
+    delete_terminfo = True,
+)
+
+standalone_python(
+    name = "python_standalone_macos_x86_64",
+    url = "https://github.com/astral-sh/python-build-standalone/releases/download/20250610/cpython-3.11.13+20250610-x86_64-apple-darwin-install_only.tar.gz",
+    sha256 = "b49044115a545e67d73f5265a613a25da7c9523431281aa7b94691f1013355af",
+)
+
+standalone_python(
+    name = "python_standalone_macos_arm64",
+    url = "https://github.com/astral-sh/python-build-standalone/releases/download/20250610/cpython-3.11.13+20250610-aarch64-apple-darwin-install_only.tar.gz",
+    sha256 = "365037494ba4f53563c22292e49a8e4d0d495bcb6534fca9666bdd1b474abf36",
+)
+
+# ----------------------------------------------------------------------------------
+# 2) The numpy wheel per platform, as a plain download. A .whl file is just a
+#    ZIP, so Bazel can unpack it directly with `type = "zip"`. After extraction
+#    the repo root contains numpy/, numpy.libs/ (Windows) and
+#    numpy-2.3.2.dist-info/ -- exactly what would sit in site-packages/.
+#
+#    Note: we deliberately download the wheel ourselves instead of reusing the
+#    `@pypi//numpy` target, because Bazel's py_library only exposes the .py
+#    files. numpy also ships compiled .pyd/.so/.dylib binaries which we need,
+#    and only the full wheel contains them. The sha256 values match the hashes
+#    pip pins for numpy 2.3.2 (cp311). Written out explicitly (no loops allowed
+#    in MODULE.bazel); only URL + sha256 differ per platform.
+# ----------------------------------------------------------------------------------
+http_archive(
+    name = "numpy_wheel_windows_x86_64",
+    url = "https://files.pythonhosted.org/packages/d5/03/0eade211c504bda872a594f045f98ddcc6caef2b7c63610946845e304d3f/numpy-2.3.2-cp311-cp311-win_amd64.whl",
+    sha256 = "240259d6564f1c65424bcd10f435145a7644a65a6811cfc3201c4a429ba79170",
+    type = "zip",
+    build_file_content = _BUNDLE_BUILD_FILE,
+)
+
+http_archive(
+    name = "numpy_wheel_linux_x86_64",
+    url = "https://files.pythonhosted.org/packages/c8/b0/fbeee3000a51ebf7222016e2939b5c5ecf8000a19555d04a18f1e02521b8/numpy-2.3.2-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
+    sha256 = "20b8200721840f5621b7bd03f8dcd78de33ec522fc40dc2641aa09537df010c3",
+    type = "zip",
+    build_file_content = _BUNDLE_BUILD_FILE,
+)
+
+http_archive(
+    name = "numpy_wheel_linux_aarch64",
+    url = "https://files.pythonhosted.org/packages/17/f2/e4d72e6bc5ff01e2ab613dc198d560714971900c03674b41947e38606502/numpy-2.3.2-cp311-cp311-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl",
+    sha256 = "f75018be4980a7324edc5930fe39aa391d5734531b1926968605416ff58c332d",
+    type = "zip",
+    build_file_content = _BUNDLE_BUILD_FILE,
+)
+
+http_archive(
+    name = "numpy_wheel_macos_x86_64",
+    url = "https://files.pythonhosted.org/packages/96/26/1320083986108998bd487e2931eed2aeedf914b6e8905431487543ec911d/numpy-2.3.2-cp311-cp311-macosx_10_9_x86_64.whl",
+    sha256 = "852ae5bed3478b92f093e30f785c98e0cb62fa0a939ed057c31716e18a7a22b9",
+    type = "zip",
+    build_file_content = _BUNDLE_BUILD_FILE,
+)
+
+http_archive(
+    name = "numpy_wheel_macos_arm64",
+    url = "https://files.pythonhosted.org/packages/c4/2b/792b341463fa93fc7e55abbdbe87dac316c5b8cb5e94fb7a59fb6fa0cda5/numpy-2.3.2-cp311-cp311-macosx_11_0_arm64.whl",
+    sha256 = "7a0e27186e781a69959d0230dd9909b5e26024f8da10683bd6344baea1885168",
+    type = "zip",
+    build_file_content = _BUNDLE_BUILD_FILE,
+)

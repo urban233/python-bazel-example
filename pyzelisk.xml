@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<sdk-config>
+    <sdk name="python-bazel-example-python-24556">
+        <root path="C:/Users/manfred/IdeaProjects"/>
+        <root path="C:/Users/manfred/github_repos/python-bazel-example/sdk/python/src"/>
+        <!-- Add more roots as needed -->
+    </sdk>
+</sdk-config>
